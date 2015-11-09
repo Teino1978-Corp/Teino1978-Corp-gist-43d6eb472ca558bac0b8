@@ -1,0 +1,375 @@
+#####################################################################
+
+# STEP 1: INSTALL REQUIRED PACKAGES AND CONNECT TO ALL LIBRARIES
+
+#####################################################################
+
+library("NLP")
+library("tm")
+library("RCurl")
+library("slam")
+library(sentiment)
+library(gridExtra)
+library(devtools)
+library(plyr)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(reshape2)
+library(wordcloud)
+library(RColorBrewer)
+library(bitops)
+library(RWeka)
+library(klaR)
+library(caret)
+library(Rstem)
+library(SnowballC)
+library(twitteR)
+library(e1071)
+require(rJava)
+#require(Rwekajars)
+#####################################################################
+
+# STEP 2: IMPORT CSV FILE TO R ENVIRONMENT
+
+#####################################################################
+
+## STEP 2.1: Get current working directory and set working directory 
+##           (avoid entering the full path of the data files)
+
+
+
+getwd() 
+#read.csv(new_res)
+Res <- new_res 
+
+## STEP 2.2: Check data class, summary and others
+
+head(Res,3)
+str(Res)
+summary(Res)
+names(Res)
+ncol(Res)
+##### ----------------------------------------------------------- #####
+
+# STEP 3: PREPARE THE TEXT FOR SENTIMENT ANALYSIS
+
+#####################################################################
+
+## STEP 3.1: Create clean function to preprocess the content  
+clean.text <- function(some_txt)
+{  
+  ### STEP 3.1(a): Remove punctuation, links
+  some_txt = gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", some_txt)
+  some_txt = gsub("@\\w+", "", some_txt)
+  some_txt = gsub("[[:punct:]]", "", some_txt)
+  some_txt = gsub("[[:digit:]]", "", some_txt)
+  some_txt = gsub("http\\w+", "", some_txt)
+  some_txt = gsub("[ \t]{2,}", "", some_txt)
+  some_txt = gsub("^\\s+|\\s+$", "", some_txt)
+  
+  ### STEP 3.1(b): Remove non-english characters
+  some_txt = gsub("[^\x20-\x7E]", "", some_txt)
+  
+  ### STEP 3.1(c): Define "tolower error handling" function
+  try.tolower = function(x)
+  {      
+    y = NA
+    try_error = tryCatch(tolower(x), error=function(e) e)
+    if (!inherits(try_error, "error"))
+      y = tolower(x)
+    return(y)
+    
+  }
+  some_txt = sapply(some_txt, try.tolower)
+  some_txt = some_txt[some_txt != ""]
+  names(some_txt) = NULL
+  return(some_txt)
+}
+
+### STEP 3.1(d): Clean the content with "clean.text" function & remove qoute
+Res$text_new <- clean.text(Res$text)
+
+class(Res)
+str(Res)
+
+##### ----------------------------------------------------------- #####
+str(Res$text_new)  # check the class                        
+head(Res$text_new,3)    # 1st 3 text
+Res$text_new <- noquote(Res$text_new) # omit qoute from text
+
+### STEP 3.2: Convert other columns & combine new column
+
+Res$tweet_date_new<-as.Date(as.POSIXlt(Res$tweet_date))
+Res$tweet_created_new<-as.Date(as.POSIXlt(Res$tweet_created))
+Res$userid_new<-as.numeric(Res$tweet_id)
+Res$retweet_new<-as.numeric(Res$retweet_count, Res$tweet_id)
+Res$other_topic_new<-as.character(Res$other_topic)
+Res$resolution_topics_new<-as.character(Res$resolution_topics)
+Res$gender_new<-as.character(Res$gender)
+Res$name_new<-as.character(Res$name)
+Res$resolution_Category_new<-as.character(Res$Resolution_Category)
+Res$text_new<-as.character(Res$text_new)
+Res$location_new<-as.character(Res$tweet_location)
+Res$state_new<-as.character(Res$tweet_state)
+Res$user_timezone_new<-as.character(Res$user_timezone)
+Res$tweet_region_new<-as.character(Res$tweet_region)
+head(Res)
+
+### STEP 3.3: Convert to dataframe, removing duplicates & check new table
+Res2<-as.data.frame(Res)
+unique(Res2) # extracting uniqe elements with removing duplicate
+
+head(Res2,3)
+
+str(Res2)
+dim(Res2)
+summary(Res2)
+
+
+#####################################################################
+
+# STEP 4: PERFORM SENTIMENT ANALYSIS OF TWEETS 
+# (BY EMOTIONAL & POLARITY CATEGORIES: Method- Learning Based)
+
+#####################################################################
+
+
+## STEP 4.1: Classify emotion
+Res2_emo = classify_emotion(Res2$text_new, algorithm="bayes", prior=1.0)     
+
+### STEP 4.1.1: Get emotion best fit
+emotion = Res2_emo[,7]                                         
+### STEP 4.1.2: Substitute NA's by "unknown"
+emotion[is.na(emotion)] = "unknown"                             
+
+## STEP 4.2: Classify polarity
+Res2_pol = classify_polarity(Res2$text_new, algorithm="bayes")  
+
+### STEP 4.2.1 Get polarity best fit
+polarity = Res2_pol[,4]
+
+## STEP 4.3: Create data frame to obtain some general statistics
+
+### STEP 4.3.1: Data frame with results
+Res2_sentiment = data.frame(text=Res2$text_new, emotion=emotion,
+                            polarity=polarity, stringsAsFactors=FALSE)
+### STEP 4.3.2: Rearrange dataset by sorting data frame
+Res2_sentiment = within(Res2_sentiment,
+                        emotion <- factor(emotion, levels=names(sort(table(emotion), 
+                                                                     decreasing=TRUE))))
+### STEP 4.4: Perform data visualization
+
+#### a) Plot distribution of emotions
+ggplot(Res2_sentiment, aes(x=emotion))+geom_bar(aes(y=..count.., fill=emotion)) +
+  xlab("Emotion Categories")+ylab("Number of Tweets")+ 
+  ggtitle("SENTIMENT ANALYSIS OF TWEETS ON Resolution(Emotions)")
+
+#### b) Plot distribution of polarity
+ggplot(Res2_sentiment, aes(x=polarity)) + geom_bar(aes(y=..count.., fill=polarity)) + 
+  xlab("Polarity Categories") + ylab("Number of Tweets") + 
+  ggtitle("SENTIMENT ANALYSIS OF TWEETS ON Resolution(Polarity)")
+
+#####################################################################
+
+####################################################################
+
+# STEP 5: PERFORM COMPARISON CLOUD TO VISUALIZE THE WORDS 
+#         & FIND MOST FREQUENT WORD OCCUR
+
+####################################################################
+
+## STEP 5.1: Separate text by emotion
+emos <- levels(factor(Res2_sentiment$emotion))
+nemo <- length(emos)
+emo.docs <- rep("", nemo)
+
+for (i in 1:nemo)    
+{
+  tmp <- Res2_sentiment$text[emotion == emos[i]]
+  emo.docs[i] <- paste(tmp, collapse=" ")
+}
+
+stopwords("english")                                ##--- Check stopwords
+emo.docs <- removeWords(emo.docs, stopwords("english"))
+class(emo.docs)
+
+corpus <- Corpus(VectorSource(emo.docs))
+mycorpus<-corpus
+
+corpus <- tm_map(corpus, stemDocument, language = "english")
+corpus <- tm_map(corpus, stemCompletion, dictionary = mycorpus)
+
+inspect(corpus)
+
+## STEP 5.2: Create Term Document Matrix
+tdm <- TermDocumentMatrix(corpus)
+colnames(tdm) <- emos
+class(tdm)  
+
+## STEP 5.3: Convert tdm into matrix  
+tdm <- as.matrix(tdm)
+class(tdm)
+
+## STEP 5.4: Save as csv file
+write.csv(tdm, 'Res2_words_stem.csv')
+
+## STEP 5.5: Find most frequent term occurances
+max(apply(tdm,1,sum))  
+which(apply(tdm,1,sum)==1312)
+
+which(apply(tdm,1,sum)>300)
+
+## STEP 5.6: Get word counts in decreasing order of 1st 15 term
+word_freqs <- sort(rowSums(tdm), decreasing=TRUE)[1:20]
+
+## STEP 5.7: Create a data frame with words and their frequencies
+dm <- data.frame(word=names(word_freqs), freq=word_freqs)
+
+elec_cand <- ggplot(subset(dm, freq>20), aes(word, freq))
+elec_cand <- elec_cand+ geom_bar(stat="identity")  #?
+elec_cand <- elec_cand+ theme(axis.text.x=element_text(angle=45, hjust=1)) #?
+
+### STEP 5.7(a): Visualize most word appear in text           
+wordcloud(dm$word, dm$freq, random.order=FALSE, 
+          colors=brewer.pal(6, "Dark2"), min.freq=10, 
+          scale=c(4,.2),rot.per=.15)
+
+### STEP 5.7(b): Visualize most word appear in text based on emotion category        
+comparison.cloud(tdm, colors=brewer.pal(nemo, "Dark2"),
+                 scale=c(3,.5), rot.per=.15,
+                 random.order=FALSE, title.size=1.5)
+
+#####################################################################
+
+# STEP 6: TEXT MINING 
+
+#####################################################################
+
+## STEP 6.1: Transforming Text
+
+### STEP 6.1.1: Build a corpus, which is a collection of text documents
+#               VectorSource specifies that the source is character vectors
+
+
+df <- data.frame(V1 = Res2$text_new, stringsAsFactors = FALSE)
+mycorpus <- Corpus(VectorSource(Res2$text_new))
+
+### STEP 6.1.2: Preprocessing Text      
+clean.corpus<-function(mycorpus)
+{
+  #    i) Change letters to lower case 
+  #   ii) remove punctuations, numbers 
+  # iii) remove stop words, whitespace
+  
+  mycorpus = tm_map(mycorpus, removePunctuation)
+  mycorpus = tm_map(mycorpus, stripWhitespace)
+  mycorpus = tm_map(mycorpus, content_transformer(tolower))
+  
+  # The general English stop-word list is tailored by adding 
+  # "available" and "via" and removing "r"
+  myStopwords <- c(stopwords('english'), "available", "via")
+  idx <- which(myStopwords == "r")
+  myStopwords <- myStopwords[-idx]
+  mycorpus <- tm_map(mycorpus, removeWords, myStopwords)
+  
+  return(mycorpus)
+}
+
+Res2.corpus = clean.corpus(mycorpus)
+
+## STEP 6.2: Stemming words to retrieve the root form, 
+#              so that words look normal
+
+### STEP 6.2.2: Create copy of corpus to use later as a dictionary 
+#               for stem completion        
+dictcorpus <- Res2.corpus
+
+### STEP 6.2.3: Perform stemDocument & inspect 1st 3 doc.
+Res2.corpus <- tm_map(Res2.corpus, stemDocument)    
+inspect(Res2.corpus[1:3])  #display detailed information on corpus  or tdm
+
+### STEP 6.2.4: Stem completion & print 1st 3 doc. in the built corpus        
+
+Res2.corpus <- tm_map(Res2.corpus, stemCompletion, dictionary=dictcorpus)
+inspect(Res2.corpus[1:3])
+
+### STEP 6.2.5: Build Term-Document Matrix
+tdm <- TermDocumentMatrix(corpus)
+colnames(tdm) <- emos
+class(tdm)  
+
+## STEP 6.3: Build td Matrix from corpus & find list of words 
+myDtm <- TermDocumentMatrix(Res2.corpus, control = list(minWordLength = 1))
+inspect(myDtm[560:570,100:110])
+
+findFreqTerms(myDtm, lowfreq=40)
+findAssocs(myDtm, 'dirltr', 0.70)
+
+
+#####################################################################
+
+# STEP 7: TEXT MINING-lassification using Naive Bayes and cleaned texts without tokenizing  
+
+#####################################################################
+RRR<- Res2_sentiment
+as.matrix(RRR)
+rownames (RRR)<- NULL
+data_final<- t(as matix(U))
+rownames(RRR) <- NULL 
+RRR
+
+
+#7.1.changing columns format to factor 
+
+RRR<- data.frame(RRR, category=Res2$resolution_Category_new) #adding category (i.e. resolutions category) coloumn to texts 
+RRR<- data.frame(RRR, gender=Res2$gender_new)  # adding gender column to the text column
+RRR$gender<-as.factor(RRR$gender) #changing column into factor format
+RRR$text<-as.factor(RRR$text)
+RRR$emotion<-as.factor(RRR$emotion)
+RRR$polarity<-as.factor(RRR$polarity)
+RRR$category<-as.factor(RRR$category)
+head(RRR)
+str(RRR)
+nrow(RRR)
+#7.2. Text classication using polrity target  
+rn_train <- sample(nrow(RRR), floor(nrow(RRR)*0.7))
+train <- RRR[rn_train, ]
+test<- RRR[-rn_train, ]
+model<- NaiveBayes(polarity~., data=train)
+predictions<- predict(model, test)#make predictions
+confusionMatrix(predictions$class, predictions$class)#summarize results
+
+#7.3. Text classication using category (i.e. different resolutions) target 
+rn_train <- sample(nrow(RRR), floor(nrow(RRR)*0.7))
+train <- RRR[rn_train, ]
+test<- RRR[-rn_train, ]
+model<- NaiveBayes(category~., data=train)
+predictions<- predict(model, test) #make predictions
+confusionMatrix(predictions$class, predictions$class) #summarize results
+
+#8. Text calssification for different gender
+
+#8.1. dividing texts into two subsets, one for male and the other for female and running Naive bayes for each subset
+
+maleR<- subset(RRR, gender=="male", select=c(text,emotion, polarity, category,gender))
+femaleR<- subset(RRR, gender=="female", select=c(text,emotion, polarity, category,gender))
+nrow(maleR)
+nrow(femaleR)
+#8.2. Running Naive Bayes for female subset (Ladies first!)
+
+rn_train <- sample(nrow(femaleR), floor(nrow(femaleR)*0.7))
+train <- femaleR[rn_train, ]
+test<- femaleR[-rn_train, ]
+model<- NaiveBayes(category~., data=train)
+predictions<- predict(model, test) #make predictions
+confusionMatrix(predictions$class, predictions$class) #summarize results
+
+#8.3. Running Naive Bayes for  male subset
+
+rn_train <- sample(nrow(maleR), floor(nrow(maleR)*0.7))
+train <- maleR[rn_train, ]
+test<- maleR[-rn_train, ]
+model<- NaiveBayes(category~., data=train)
+predictions<- predict(model, test) #make predictions
+confusionMatrix(predictions$class, predictions$class) #summarize results
